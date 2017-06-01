@@ -348,8 +348,10 @@ struct perf_open_properties {
 	u32 sample_flags;
 
 	u64 single_context:1;
+	u64 single_context_hw:1;
 	u64 ctx_handle;
-
+	u64 ctx_hw_id;
+	
 	/* OA sampling state */
 	int metrics_set;
 	int oa_format;
@@ -2555,6 +2557,21 @@ i915_perf_open_ioctl_locked(struct drm_i915_private *dev_priv,
 		}
 	}
 
+	if (props->single_context_hw) {
+		struct i915_gem_context *ctx;
+
+		list_for_each_entry(ctx, &dev_priv->context_list, link) {
+			if (ctx->hw_id == props->ctx_hw_id) {
+				specific_ctx = ctx;
+				break;
+			}
+		}
+		if (!specific_ctx) {
+			DRM_ERROR("zhen: wrong hw ctx id\n");
+			goto err;
+		}
+	}
+
 	/*
 	 * On Haswell the OA unit supports clock gating off for a specific
 	 * context and in this mode there's no visibility of metrics for the
@@ -2708,6 +2725,10 @@ static int read_properties_unlocked(struct drm_i915_private *dev_priv,
 			props->single_context = 1;
 			props->ctx_handle = value;
 			break;
+		case DRM_I915_PERF_PROP_CTX_HW_ID:
+			props->single_context_hw = 1;
+			props->ctx_hw_id = value;
+			break;
 		case DRM_I915_PERF_PROP_SAMPLE_OA:
 			props->sample_flags |= SAMPLE_OA_REPORT;
 			break;
@@ -2779,6 +2800,9 @@ static int read_properties_unlocked(struct drm_i915_private *dev_priv,
 		uprop += 2;
 	}
 
+	if (props->single_context && props->single_context_hw)
+		return -EINVAL;
+	
 	return 0;
 }
 
@@ -2828,12 +2852,15 @@ int i915_perf_open_ioctl(struct drm_device *dev, void *data,
 		return -EINVAL;
 	}
 
+	DRM_INFO("zhen: i915 perf open\n");
 	ret = read_properties_unlocked(dev_priv,
 				       u64_to_user_ptr(param->properties_ptr),
 				       param->num_properties,
 				       &props);
-	if (ret)
+	if (ret) {
+		DRM_ERROR("zhen: read props err\n");
 		return ret;
+	}
 
 	mutex_lock(&dev_priv->perf.lock);
 	ret = i915_perf_open_ioctl_locked(dev_priv, param, &props, file);
